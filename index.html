@@ -1,0 +1,255 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+<title>Zıpla ve Kaçır!</title>
+<style>
+  :root{ --hud:22px; --best:16px; --hint:14px; --title:36px; --p:18px; --btn:20px; --pad:20px; --top:15px; }
+  /* Küçük telefonlar */
+  @media (max-width:480px){ :root{ --hud:17px; --best:12px; --hint:11px; --title:26px; --p:14px; --btn:17px; --pad:14px; --top:10px; } }
+  /* Yatay mobil (kısa yükseklik) */
+  @media (max-height:460px){ :root{ --hud:15px; --hint:10px; --title:22px; --p:13px; --btn:15px; --top:6px; } }
+
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0; height: 100%;
+    overflow: hidden; touch-action: none;
+    font-family: 'Segoe UI', Arial, sans-serif;
+    user-select: none; -webkit-user-select: none;
+    background: linear-gradient(180deg, #fdeff9 0%, #e0f7ff 100%);
+  }
+  #game { position: fixed; inset: 0; display: block; }
+  .hud {
+    position: absolute; top: var(--top); color: #333;
+    font-weight: bold; font-size: var(--hud); z-index: 5;
+    text-shadow: 0 2px 4px rgba(255,255,255,.7);
+    pointer-events: none;
+  }
+  #score { left: var(--top); }
+  #combo { right: var(--top); color: #e91e63; }
+  #best  { font-size: var(--best); color: #666; }
+  #hint {
+    position: absolute; bottom: var(--top); left: 50%;
+    transform: translateX(-50%);
+    font-size: var(--hint); color: rgba(0,0,0,.45);
+    pointer-events: none; text-align: center; z-index: 5;
+    width: 92%; white-space: normal;
+  }
+  .overlay {
+    position: absolute; inset: 0; display: flex;
+    flex-direction: column; align-items: center; justify-content: center;
+    background: rgba(255,255,255,.85); backdrop-filter: blur(6px);
+    z-index: 10; text-align: center; padding: var(--pad);
+  }
+  .overlay h1 { margin: 0 0 10px; color: #333; font-size: var(--title); }
+  .overlay p  { color: #555; margin: 6px 0; font-size: var(--p); }
+  .overlay button {
+    margin-top: 18px; padding: 12px 30px; font-size: var(--btn);
+    background: #4CAF50; color: white; border: none;
+    border-radius: 30px; cursor: pointer;
+    box-shadow: 0 6px 16px rgba(76,175,80,.4);
+    transition: transform .1s;
+  }
+  .overlay button:active { transform: scale(.95); }
+  .hidden { display: none !important; }
+  .legend { display: flex; gap: 12px; margin-top: 12px; flex-wrap: wrap; justify-content: center; }
+  .dot { width: 20px; height: 20px; border-radius: 50%; }
+  .keys { display: none; }
+  .touch .nokeys { display: block; }
+  @media (pointer:fine){ .keys{ display:block; } .nokeys{ display:none; } }
+  #flash {
+    position: absolute; inset: 0; pointer-events: none;
+    background: red; opacity: 0; z-index: 4; transition: opacity .25s;
+  }
+</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+<div class="hud" id="score">Puan: 0</div>
+<div class="hud" id="combo">x1</div>
+<div class="hud" id="best" style="top:calc(var(--top) + 2.2em);left:var(--top)">Rekor: 0</div>
+<div id="hint"></div>
+<div id="flash"></div>
+
+<div id="startScreen" class="overlay">
+  <h1>🎈 Zıpla ve Kaçır!</h1>
+  <p>Topu kendi renginle yakala, bombadan kaç!</p>
+  <p class="nokeys">👆 Dokun = renk 🔴🔵🟢 · Sürükle = hareket</p>
+  <p class="keys">🖱️ Tık = renk · Fareyi kaydır = hareket · ← →</p>
+  <div class="legend">
+    <span class="dot" style="background:gold"></span>
+    <span class="dot" style="background:#222"></span>
+    <span class="dot" style="background:#9b59b6"></span>
+    <span style="font-size:13px;color:#777;align-self:center">🪙 +50 💣 ⏱️</span>
+  </div>
+  <button onclick="startGame()">▶ BAŞLA</button>
+</div>
+
+<div id="overScreen" class="overlay hidden">
+  <h1>💥 Oyun Bitti!</h1>
+  <p>Puanın: <b id="finalScore">0</b></p>
+  <p id="newBest" style="color:#e91e63;font-weight:bold" class="hidden">🏆 Yeni Rekor!</p>
+  <button onclick="startGame()">🔄 Tekrar Oyna</button>
+</div>
+
+<script>
+/* ===== SES ===== */
+let audioCtx=null;
+function ensureAudio(){ if(!audioCtx){ try{audioCtx=new (window.AudioContext||window.webkitAudioContext)();}catch(e){} } if(audioCtx&&audioCtx.state==='suspended')audioCtx.resume(); }
+function tone(f,d,t='sine',v=.2){ if(!audioCtx)return; const o=audioCtx.createOscillator(),g=audioCtx.createGain(); o.type=t;o.frequency.value=f; g.gain.setValueAtTime(v,audioCtx.currentTime); g.gain.exponentialRampToValueAtTime(.0001,audioCtx.currentTime+d); o.connect(g).connect(audioCtx.destination);o.start();o.stop(audioCtx.currentTime+d); }
+const sfx={pop:()=>{tone(800,.12,'sine',.25);setTimeout(()=>tone(1200,.1,'sine',.2),40);},wrong:()=>tone(180,.3,'sawtooth',.3),swap:()=>tone(500,.08,'triangle',.15),gold:()=>[660,880,990,1320].forEach((f,i)=>setTimeout(()=>tone(f,.15,'triangle',.25),i*80)),bomb:()=>{tone(80,.6,'sawtooth',.4);tone(60,.6,'square',.3);},combo:n=>tone(600+n*100,.15,'square',.2),slow:()=>[900,700,500].forEach((f,i)=>setTimeout(()=>tone(f,.2,'sine',.2),i*90))};
+
+/* ===== CİHAZ PROFİLİ (kullanıcıdan çekilen veri) ===== */
+const IS_TOUCH = matchMedia('(pointer:coarse)').matches || navigator.maxTouchPoints>0;
+document.body.classList.add(IS_TOUCH?'touch':'mouse');
+document.getElementById('hint').textContent = IS_TOUCH
+  ? '👆 Dokun: renk değişir · Parmağını sürükle: hareket'
+  : '🖱️ Tık: renk · Fareyi kaydır: hareket · Boşluk/←→ klavye';
+
+/* ===== KURULUM + EKRAN ÖLÇEĞİ ===== */
+const canvas=document.getElementById('game'),ctx=canvas.getContext('2d');
+const scoreEl=document.getElementById('score'),comboEl=document.getElementById('combo'),bestEl=document.getElementById('best'),flash=document.getElementById('flash');
+let W,H,DPR=window.devicePixelRatio||1,SC=1;
+function clamp(v,a,b){return Math.max(a,Math.min(b,v));}
+function computeScale(){ SC = clamp(Math.min(W,H)/640, .8, 1.5); }
+function resize(){
+  W=window.innerWidth; H=window.innerHeight;
+  canvas.width=W*DPR; canvas.height=H*DPR;
+  canvas.style.width=W+'px'; canvas.style.height=H+'px';
+  ctx.setTransform(DPR,0,0,DPR,0,0);
+  computeScale();
+  if(player){ player.r=32*SC; player.y=H-110*SC; player.x=clamp(player.x,player.r+6*SC,W-player.r-6*SC); player.tx=player.x; }
+}
+window.addEventListener('resize',resize);
+window.addEventListener('orientationchange',()=>setTimeout(resize,120));
+
+/* ===== DURUM ===== */
+const COLORS=['#e74c3c','#3498db','#2ecc71'];
+let player,items,confetti,score,combo,best,colorIdx,gameRunning,spawnTimer,spawnEvery,fallBase,slowUntil,shakeUntil,lastT,jumpPhase=0;
+best=parseInt(localStorage.getItem('zm_best')||'0',10); bestEl.textContent='Rekor: '+best;
+function reset(){
+  computeScale();
+  player={x:W/2,tx:W/2,y:H-110*SC,r:32*SC,vx:0};
+  items=[];confetti=[];score=0;combo=0;colorIdx=0;
+  spawnTimer=0;spawnEvery=1.1;fallBase=180*SC;
+  slowUntil=0;shakeUntil=0;gameRunning=true;
+  scoreEl.textContent='Puan: 0';comboEl.textContent='x1';
+  lastT=performance.now();
+}
+function mult(){return combo>=30?4:combo>=20?3:combo>=10?2:1;}
+
+/* ===== SPAWN ===== */
+function spawnItem(){
+  const r=Math.random(); let type='normal',color=0;
+  if(r<.08)type='gold'; else if(r<.18)type='bomb'; else if(r<.24)type='slow'; else color=Math.floor(Math.random()*3);
+  const size=26*SC;
+  items.push({x:size+Math.random()*(W-size*2),y:-size,r:size,speed:fallBase+Math.random()*80*SC,type,color});
+}
+function conf(x,y,col){for(let i=0;i<14;i++)confetti.push({x,y,vx:(Math.random()-.5)*300*SC,vy:-Math.random()*260*SC-50*SC,life:.8+Math.random()*.4,color:col,size:(3+Math.random()*4)*SC});}
+
+/* ===== UPDATE ===== */
+function update(dt){
+  jumpPhase+=dt*6;
+  const prevX=player.x;
+  player.tx=clamp(player.tx,player.r+6*SC,W-player.r-6*SC);
+  player.x+=(player.tx-player.x)*Math.min(1,dt*12);
+  player.vx=(player.x-prevX)/dt;
+  const t=performance.now()/1000;
+  if(t>15)spawnEvery=Math.max(.45,1.1-(t-15)*.03);
+  fallBase=180*SC+Math.min(260*SC,t*4*SC);
+  spawnTimer+=dt; if(spawnTimer>=spawnEvery){spawnItem();spawnTimer=0;}
+  const mul=performance.now()<slowUntil?.5:1;
+  for(let i=items.length-1;i>=0;i--){
+    const it=items[i]; it.y+=it.speed*mul*dt;
+    if(Math.hypot(it.x-player.x,it.y-player.y)<it.r+player.r){
+      if(it.type==='bomb'){shakeUntil=performance.now()+400;flash.style.opacity=.6;setTimeout(()=>flash.style.opacity=0,120);sfx.bomb();items.splice(i,1);endGame();return;}
+      if(it.type==='gold'){score+=50*mult();sfx.gold();conf(it.x,it.y,'gold');}
+      else if(it.type==='slow'){slowUntil=performance.now()+5000;sfx.slow();conf(it.x,it.y,'#9b59b6');}
+      else if(it.color===colorIdx){combo++;score+=10*mult();sfx.pop();if(combo%10===0&&combo<=30)sfx.combo(combo/10);conf(it.x,it.y,COLORS[it.color]);}
+      else{sfx.wrong();items.splice(i,1);endGame();return;}
+      items.splice(i,1);scoreEl.textContent='Puan: '+score;comboEl.textContent='x'+mult();continue;
+    }
+    if(it.y>H+60)items.splice(i,1);
+  }
+  for(let i=confetti.length-1;i>=0;i--){const c=confetti[i];c.vy+=700*SC*dt;c.x+=c.vx*dt;c.y+=c.vy*dt;c.life-=dt;if(c.life<=0)confetti.splice(i,1);}
+}
+
+/* ===== ÇİZİM ===== */
+function draw(){
+  const g=ctx.createLinearGradient(0,0,0,H);g.addColorStop(0,'#fdeff9');g.addColorStop(1,'#e0f7ff');
+  ctx.fillStyle=g;ctx.fillRect(0,0,W,H);
+  if(performance.now()<slowUntil){ctx.fillStyle='rgba(155,89,182,.12)';ctx.fillRect(0,0,W,H);}
+  ctx.save();
+  if(performance.now()<shakeUntil)ctx.translate((Math.random()-.5)*14*SC,(Math.random()-.5)*14*SC);
+  for(const it of items)drawItem(it);
+  for(const c of confetti){ctx.globalAlpha=Math.max(0,Math.min(1,c.life));ctx.fillStyle=c.color;ctx.fillRect(c.x,c.y,c.size,c.size);}
+  ctx.globalAlpha=1;
+  drawPlayer();
+  ctx.restore();
+}
+function drawPlayer(){
+  const b=Math.abs(Math.sin(jumpPhase)),sq=1+b*.18,r=player.r;
+  const lean=clamp(player.vx*.0016/SC,-.35,.35),look=clamp(player.vx*.012/SC,-3,3);
+  ctx.save();ctx.translate(player.x,player.y);ctx.rotate(lean);ctx.scale(sq,1/sq);
+  ctx.beginPath();ctx.ellipse(0,r*.9,r*.9,r*.25,0,0,7);ctx.fillStyle='rgba(0,0,0,.15)';ctx.fill();
+  ctx.beginPath();for(let a=0;a<6.29;a+=.15){const rr=r+Math.sin(a*3+jumpPhase*2)*2*SC,px=Math.cos(a)*rr,py=Math.sin(a)*rr;a===0?ctx.moveTo(px,py):ctx.lineTo(px,py);}ctx.closePath();ctx.fillStyle=COLORS[colorIdx];ctx.fill();
+  ctx.beginPath();ctx.arc(-r*.3,-r*.35,r*.22,0,7);ctx.fillStyle='rgba(255,255,255,.55)';ctx.fill();
+  ctx.fillStyle='#fff';ctx.beginPath();ctx.arc(-r*.3,-r*.05,r*.22,0,7);ctx.arc(r*.3,-r*.05,r*.22,0,7);ctx.fill();
+  ctx.fillStyle='#222';ctx.beginPath();ctx.arc(-r*.3+look,-r*.05,r*.1,0,7);ctx.arc(r*.3+look,-r*.05,r*.1,0,7);ctx.fill();
+  ctx.restore();
+}
+function drawItem(it){
+  ctx.save();ctx.translate(it.x,it.y);ctx.rotate(performance.now()/700);
+  if(it.type==='bomb'){ctx.beginPath();ctx.arc(0,0,it.r,0,7);ctx.fillStyle='#222';ctx.fill();ctx.fillStyle='#ff9800';ctx.fillRect(-3*SC,-it.r-10*SC,6*SC,10*SC);ctx.beginPath();ctx.arc(0,-it.r-12*SC,4*SC,0,7);ctx.fill();}
+  else if(it.type==='gold'){ctx.beginPath();ctx.arc(0,0,it.r,0,7);ctx.fillStyle='gold';ctx.fill();ctx.lineWidth=3;ctx.strokeStyle='#b8860b';ctx.stroke();ctx.rotate(-performance.now()/700);ctx.fillStyle='#7a5901';ctx.font=`bold ${22*SC}px Arial`;ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText('₺',0,1);}
+  else if(it.type==='slow'){ctx.beginPath();ctx.arc(0,0,it.r,0,7);ctx.fillStyle='#9b59b6';ctx.fill();ctx.rotate(-performance.now()/700);ctx.strokeStyle='#fff';ctx.lineWidth=2.5;ctx.beginPath();ctx.arc(0,0,it.r*.7,0,7);ctx.stroke();ctx.beginPath();ctx.moveTo(0,0);ctx.lineTo(0,-it.r*.45);ctx.moveTo(0,0);ctx.lineTo(it.r*.35,0);ctx.stroke();}
+  else{ctx.beginPath();ctx.arc(0,0,it.r,0,7);ctx.fillStyle=COLORS[it.color];ctx.fill();ctx.beginPath();ctx.arc(-it.r*.3,-it.r*.3,it.r*.22,0,7);ctx.fillStyle='rgba(255,255,255,.5)';ctx.fill();}
+  ctx.restore();
+}
+
+/* ===== DÖNGÜ ===== */
+function loop(now){ if(!gameRunning)return; const dt=Math.min(.05,(now-lastT)/1000);lastT=now;update(dt);draw();requestAnimationFrame(loop); }
+
+/* ===== GİRDİ — TAP / DRAG ÇAKIŞMASIZ ===== */
+const TAP_MAX_MS=250, DRAG_PX=12;
+let pDown=false, downX=0, downY=0, downT=0, dragging=false;
+function changeColor(){colorIdx=(colorIdx+1)%3;sfx.swap();}
+canvas.addEventListener('pointerdown',e=>{
+  if(!gameRunning)return; ensureAudio();
+  pDown=true; dragging=false; downX=e.clientX; downY=e.clientY; downT=performance.now();
+});
+canvas.addEventListener('pointermove',e=>{
+  if(!gameRunning)return;
+  if(!IS_TOUCH && !pDown){ player.tx=e.clientX; return; }   // fare: basılı değilken takip
+  if(!pDown)return;
+  if(!dragging && Math.hypot(e.clientX-downX,e.clientY-downY)>DRAG_PX*SC) dragging=true;
+  if(dragging) player.tx=e.clientX;
+});
+window.addEventListener('pointerup',e=>{
+  if(!pDown)return; pDown=false;
+  const quick=performance.now()-downT<TAP_MAX_MS;
+  if(IS_TOUCH){ if(!dragging && quick) changeColor(); }      // dokunmatik: kayma+kısa ise renk
+  else { if(!dragging) changeColor(); }                       // fare: tıklama = renk
+  dragging=false;
+});
+canvas.addEventListener('pointercancel',()=>{pDown=false;dragging=false;});
+
+/* klavye */
+const keys={};
+window.addEventListener('keydown',e=>{ if(e.code==='Space'){e.preventDefault();ensureAudio();if(gameRunning)changeColor();} keys[e.key]=true; });
+window.addEventListener('keyup',e=>{keys[e.key]=false;});
+function applyKeys(dt){ const s=600*SC*dt; if(keys['ArrowLeft']||keys['a']||keys['A'])player.tx-=s; if(keys['ArrowRight']||keys['d']||keys['D'])player.tx+=s; }
+const _u=update; update=function(dt){applyKeys(dt);_u(dt);};
+
+/* ===== BAŞLAT/BİTİR ===== */
+function startGame(){ ensureAudio(); document.getElementById('startScreen').classList.add('hidden'); document.getElementById('overScreen').classList.add('hidden'); reset(); requestAnimationFrame(loop); }
+function endGame(){ gameRunning=false; document.getElementById('finalScore').textContent=score;
+  if(score>best){best=score;localStorage.setItem('zm_best',best);bestEl.textContent='Rekor: '+best;document.getElementById('newBest').classList.remove('hidden');}
+  else document.getElementById('newBest').classList.add('hidden');
+  setTimeout(()=>document.getElementById('overScreen').classList.remove('hidden'),350);
+}
+resize(); reset(); gameRunning=false; draw();
+</script>
+</body>
+</html>
